@@ -15,6 +15,14 @@ export type Stop = {
   completed: boolean;
   /** Driver remark explaining why a stop couldn't be completed. */
   remark?: string | undefined;
+  /** Asset tag the driver scanned/typed to verify the equipment. */
+  scannedTag?: string | undefined;
+  /** Condition photos attached by the driver (data URLs, kept in memory). */
+  photos?: string[] | undefined;
+  /** Optional driver-reported condition: "Good" | "Needs attention" | "Damaged". */
+  condition?: string | undefined;
+  /** Optional free-text detail about the condition. */
+  conditionNote?: string | undefined;
 };
 export type Trip = { id: string; dayId: string; name: string; branch: string; date: string; stops: Stop[]; miles: number };
 export type Day = { id: string; short: string; label: string; date: string };

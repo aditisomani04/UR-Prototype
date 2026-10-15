@@ -1,5 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { useEffect, useRef, useState } from "react";
+import { equipmentInfo, assetTag } from "@/lib/equipment";
+import { useWebMCP } from "use-webmcp-tool";
+import { runWebMCPTool } from "@/lib/webmcp-telemetry";
 import { LanguageContext, languages, isLanguage, useLanguage, translate, type Language } from "@/lib/language";
 import { initialTrips, drivers, days, mapsRouteUrl, mapsStopUrl, mapsBranchUrl, type Trip, type Stop, type Driver } from "@/lib/trips";
 
@@ -38,15 +42,53 @@ function App() {
   const [trips, setTrips] = useState<Trip[]>(initialTrips);
   const [returned, setReturned] = useState<Record<string, boolean>>({});
   const [dayId, setDayId] = useState("mon");
+  const tripsRef = useRef(trips);
+  tripsRef.current = trips;
 
-  const complete = (tripId: string, stopId: string) =>
-    setTrips((ts) => ts.map((t) => (t.id !== tripId ? t : { ...t, stops: t.stops.map((s) => (s.id === stopId ? { ...s, completed: true } : s)) })));
+  // Restore this driver's saved progress after sign-in.
+  useEffect(() => {
+    if (!driver) { setTrips(initialTrips); setReturned({}); return; }
+    let cancelled = false;
+    supabase.from("stop_progress").select("stop_id, data").eq("driver_id", driver.id).then(({ data }) => {
+      if (cancelled || !data) return;
+      const saved = new Map(data.map((r) => [r.stop_id, r.data as Partial<Stop> & { returned?: boolean }]));
+      setTrips(initialTrips.map((t) => ({ ...t, stops: t.stops.map((s) => ({ ...s, ...(saved.get(s.id) ?? {}) })) })));
+      const r: Record<string, boolean> = {};
+      for (const t of initialTrips) if (saved.get(`return:${t.id}`)?.returned) r[t.id] = true;
+      setReturned(r);
+    });
+    return () => { cancelled = true; };
+  }, [driver]);
 
-  const reportStop = (tripId: string, stopId: string, remark: string) =>
-    setTrips((ts) => ts.map((t) => (t.id !== tripId ? t : { ...t, stops: t.stops.map((s) => (s.id === stopId ? { ...s, remark } : s)) })));
+  const save = (stopId: string, data: Record<string, unknown>) => {
+    if (!driver) return;
+    void supabase.from("stop_progress").upsert({ driver_id: driver.id, stop_id: stopId, data: data as never, updated_at: new Date().toISOString() }).then(({ error }) => {
+      if (error) console.error("Could not save progress", error.message);
+    });
+  };
 
-  const clearStopRemark = (tripId: string, stopId: string) =>
-    setTrips((ts) => ts.map((t) => (t.id !== tripId ? t : { ...t, stops: t.stops.map((s) => (s.id === stopId ? { ...s, remark: undefined } : s)) })));
+  const updateStop = (tripId: string, stopId: string, patch: Partial<Stop>) => {
+    const current = tripsRef.current.find((t) => t.id === tripId)?.stops.find((s) => s.id === stopId);
+    if (current) {
+      const next = { ...current, ...patch };
+      save(stopId, { completed: next.completed, remark: next.remark ?? null, scannedTag: next.scannedTag ?? null, photos: next.photos ?? [], condition: next.condition ?? null, conditionNote: next.conditionNote ?? null });
+    }
+    setTrips((ts) => ts.map((t) => (t.id !== tripId ? t : { ...t, stops: t.stops.map((s) => (s.id === stopId ? { ...s, ...patch } : s)) })));
+  };
+  const complete = (tripId: string, stopId: string) => updateStop(tripId, stopId, { completed: true });
+  const uncomplete = (tripId: string, stopId: string) => updateStop(tripId, stopId, { completed: false });
+  const reportStop = (tripId: string, stopId: string, remark: string) => updateStop(tripId, stopId, { remark });
+  const clearStopRemark = (tripId: string, stopId: string) => updateStop(tripId, stopId, { remark: undefined });
+  const markReturned = (tripId: string) => { setReturned((r) => ({ ...r, [tripId]: true })); save(`return:${tripId}`, { returned: true }); };
+
+  const resetProgress = async () => {
+    if (!driver) return;
+    const { error } = await supabase.from("stop_progress").delete().eq("driver_id", driver.id);
+    if (error) { console.error("Could not reset progress", error.message); return; }
+    setTrips(initialTrips);
+    setReturned({});
+    setView({ name: "trips" });
+  };
 
   return (
     <LanguageContext.Provider value={language}>
@@ -62,7 +104,7 @@ function App() {
           </label>
         </div>
         {view.name === "login" && <Login onLogin={(d) => { setDriver(d); setView({ name: "trips" }); }} />}
-        {view.name === "trips" && <TripList trips={trips.filter((t) => t.dayId === dayId)} allTrips={trips} dayId={dayId} onDay={setDayId} returned={returned} driver={driver} onOpen={(id) => setView({ name: "trip", tripId: id })} onLogout={() => { setDriver(null); setView({ name: "login" }); }} />}
+        {view.name === "trips" && <TripList trips={trips.filter((t) => t.dayId === dayId)} allTrips={trips} dayId={dayId} onDay={setDayId} returned={returned} driver={driver} onOpen={(id) => setView({ name: "trip", tripId: id })} onLogout={() => { setDriver(null); setView({ name: "login" }); }} onReset={resetProgress} />}
         {view.name === "trip" && (() => {
           const trip = trips.find((t) => t.id === view.tripId);
           if (!trip) return null;
@@ -73,7 +115,7 @@ function App() {
           if (!trip) return null;
           const stop = trip.stops.find((s) => s.id === view.stopId);
           if (!stop) return null;
-          return <StopDetail stop={stop} index={trip.stops.indexOf(stop) + 1} onBack={() => setView({ name: "trip", tripId: trip.id })} onComplete={() => { complete(trip.id, stop.id); setView({ name: "trip", tripId: trip.id }); }} onReport={(remark) => reportStop(trip.id, stop.id, remark)} onClearRemark={() => clearStopRemark(trip.id, stop.id)} />;
+          return <StopDetail stop={stop} index={trip.stops.indexOf(stop) + 1} onBack={() => setView({ name: "trip", tripId: trip.id })} onComplete={() => { complete(trip.id, stop.id); setView({ name: "trip", tripId: trip.id }); }} onReport={(remark) => reportStop(trip.id, stop.id, remark)} onClearRemark={() => clearStopRemark(trip.id, stop.id)} onUndo={() => uncomplete(trip.id, stop.id)} onUpdate={(patch) => updateStop(trip.id, stop.id, patch)} />;
         })()}
       </div>
     </div>
@@ -145,11 +187,11 @@ function Progress({ done, total }: { done: number; total: number }) {
   );
 }
 
-function TripList({ trips, allTrips, dayId, onDay, returned, driver, onOpen, onLogout }: { trips: Trip[]; allTrips: Trip[]; dayId: string; onDay: (d: string) => void; returned: Record<string, boolean>; driver: Driver | null; onOpen: (id: string) => void; onLogout: () => void }) {
+function TripList({ trips, allTrips, dayId, onDay, returned, driver, onOpen, onLogout, onReset }: { trips: Trip[]; allTrips: Trip[]; dayId: string; onDay: (d: string) => void; returned: Record<string, boolean>; driver: Driver | null; onOpen: (id: string) => void; onLogout: () => void; onReset: () => void }) {
   const { t: tr, localize, date } = useLanguage();
   return (
     <>
-      <Header title={tr("Weekly schedule")} sub={driver ? `${driver.name} · ${driver.id} · ${localize(driver.truck)}` : undefined} right={<button onClick={onLogout} className="text-sm opacity-90">{tr('Sign out')}</button>} />
+      <Header title={tr("Weekly schedule")} sub={driver ? `${driver.name} · ${driver.id} · ${localize(driver.truck)}` : undefined} right={<div className="flex items-center gap-3"><button onClick={onReset} className="text-sm opacity-90 underline">{tr("Reset progress")}</button><button onClick={onLogout} className="text-sm opacity-90">{tr('Sign out')}</button></div>} />
       <nav className="grid grid-cols-5 gap-1 p-3 border-b border-border bg-card">
         {days.map((d) => {
           const dt = allTrips.filter((t) => t.dayId === d.id);
@@ -202,6 +244,24 @@ function TripDetail({ trip, returned, onBack, onStop, onReturn }: { trip: Trip; 
   const allDone = pending.every((s) => s.remark);
   const nextId = pending.find((s) => !s.remark)?.id;
   const routeStops = pending.filter((s) => !s.remark);
+  useWebMCP({
+    name: "list_trip_stops",
+    description: "List the stops of the trip currently shown, with status (done, reported, pending).",
+    annotations: { readOnlyHint: true, untrustedContentHint: true },
+    execute: () => runWebMCPTool("list_trip_stops", () =>
+      trip.stops.map((s) => `${s.id}: [${s.type}] ${s.customer}, ${s.address} — ${s.completed ? "done" : s.remark ? `reported: ${s.remark}` : "pending"}`).join("\n")),
+  });
+  useWebMCP({
+    name: "open_stop",
+    description: "Open a stop's detail screen in the currently shown trip.",
+    inputSchema: { type: "object", properties: { stopId: { type: "string", description: "Stop ID from list_trip_stops." } }, required: ["stopId"] },
+    execute: ({ stopId }: { stopId: string }) => runWebMCPTool("open_stop", () => {
+      const s = trip.stops.find((x) => x.id === stopId);
+      if (!s) throw new Error("No such stop in this trip.");
+      onStop(s.id);
+      return `Opened ${s.customer}.`;
+    }),
+  });
   return (
     <>
       <Header title={localize(trip.name)} sub={localize(trip.date)} onBack={onBack} />
@@ -282,6 +342,7 @@ function StopCard({ stop, n, next, onClick }: { stop: Stop; n: number; next?: bo
           <TypeBadge type={stop.type} />
           {next && <span className="text-xs font-bold text-primary">{tr('NEXT STOP')}</span>}
           {stop.remark && <span className="text-xs font-bold px-2 py-0.5 rounded bg-accent text-accent-foreground">{tr('⚠ Issue reported')}</span>}
+          {stop.condition && stop.condition !== "Good" && <span className="text-xs font-bold px-2 py-0.5 rounded bg-accent text-accent-foreground">{tr("⚠ {status}", { status: tr(stop.condition) })}</span>}
         </div>
         <p className="font-bold mt-1">{stop.customer}</p>
         <p className="text-sm text-muted-foreground truncate">{stop.address}</p>
@@ -294,8 +355,156 @@ function StopCard({ stop, n, next, onClick }: { stop: Stop; n: number; next?: bo
 }
 
 const QUICK_REASONS = ["Site closed — no access", "Customer not ready", "Equipment issue", "Traffic — ran out of time", "Contact unreachable"];
+const CONDITIONS = ["Good", "Needs attention", "Damaged"];
 
-function StopDetail({ stop, index, onBack, onComplete, onReport, onClearRemark }: { stop: Stop; index: number; onBack: () => void; onComplete: () => void; onReport: (remark: string) => void; onClearRemark: () => void }) {
+function EquipmentPanel({ stop, onUpdate }: { stop: Stop; onUpdate: (patch: Partial<Stop>) => void }) {
+  const { t: tr } = useLanguage();
+  const info = equipmentInfo(stop.equipment);
+  const tag = assetTag(stop.equipment);
+  const [scanning, setScanning] = useState(false);
+  const [manual, setManual] = useState("");
+  const [scanError, setScanError] = useState("");
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const photos = stop.photos ?? [];
+
+  const check = (raw: string) => {
+    const code = raw.trim().toUpperCase().replace(/^#/, "");
+    if (!code) return;
+    if (code === tag) { onUpdate({ scannedTag: code }); setScanning(false); setScanError(""); setManual(""); }
+    else setScanError(tr("Tag {code} doesn't match this stop's equipment.", { code }));
+  };
+
+  useEffect(() => {
+    if (!scanning) return;
+    let stream: MediaStream | undefined;
+    let raf = 0;
+    let stopped = false;
+    const Detector = (window as unknown as { BarcodeDetector?: new () => { detect: (v: HTMLVideoElement) => Promise<{ rawValue: string }[]> } }).BarcodeDetector;
+    if (!Detector || !navigator.mediaDevices?.getUserMedia) { setScanError(tr("Camera scanning isn't supported on this device — type the tag number instead.")); return; }
+    const detector = new Detector();
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }).then((s) => {
+      stream = s;
+      const v = videoRef.current;
+      if (!v || stopped) return;
+      v.srcObject = s;
+      void v.play();
+      const loop = async () => {
+        if (stopped) return;
+        try { const r = await detector.detect(v); if (r[0]) { check(r[0].rawValue); return; } } catch { /* frame not ready */ }
+        raf = requestAnimationFrame(() => void loop());
+      };
+      void loop();
+    }).catch(() => setScanError(tr("Camera access was blocked — type the tag number instead.")));
+    return () => { stopped = true; cancelAnimationFrame(raf); stream?.getTracks().forEach((tk) => tk.stop()); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanning]);
+
+  const addPhotos = (files: FileList | null) => {
+    if (!files) return;
+    Array.from(files).forEach((f) => {
+      const reader = new FileReader();
+      reader.onload = () => onUpdate({ photos: [...(stop.photos ?? []), String(reader.result)] });
+      reader.readAsDataURL(f);
+    });
+  };
+
+  return (
+    <section className="rounded-xl border border-border overflow-hidden">
+      <img src={info.photo} alt={tr(info.category)} loading="lazy" width={912} height={736} className="w-full h-44 object-contain bg-muted" />
+      <div className="p-4 flex flex-col gap-3">
+        <div>
+          <p className="text-xs uppercase font-bold tracking-wide text-muted-foreground">{tr(info.category)}</p>
+          <p className="text-sm">{tr("Asset tag")}: <b className="font-mono">{tag}</b></p>
+        </div>
+        <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+          {info.specs.map((s) => (<div key={s.label}><dt className="text-xs text-muted-foreground">{tr(s.label)}</dt><dd className="font-semibold">{s.value}</dd></div>))}
+        </dl>
+        <div>
+          <p className="text-xs uppercase font-bold tracking-wide text-muted-foreground">{tr(stop.type === "delivery" ? "Before drop-off" : "Before loading")}</p>
+          <ul className="mt-1 text-sm list-disc pl-5">{info.checks.map((c) => <li key={c}>{tr(c)}</li>)}</ul>
+        </div>
+        <a href={info.catalogUrl} target="_blank" rel="noreferrer" className="h-11 rounded-lg bg-secondary text-secondary-foreground font-bold text-sm grid place-items-center">{tr("📖 Specs & manuals on United Rentals")}</a>
+
+        <div className="border-t border-border pt-3 flex flex-col gap-2">
+          <p className="text-xs uppercase font-bold tracking-wide">{tr("Verify equipment")}</p>
+          {stop.scannedTag ? (
+            <div className="rounded-lg bg-success text-success-foreground p-3 font-bold text-sm flex items-center justify-between gap-2">
+              <span>{tr("✓ Tag {code} verified", { code: stop.scannedTag })}</span>
+              <button onClick={() => onUpdate({ scannedTag: undefined })} className="underline text-xs">{tr("Rescan")}</button>
+            </div>
+          ) : (
+            <>
+              {scanning ? (
+                <div className="flex flex-col gap-2">
+                  <video ref={videoRef} muted playsInline className="w-full h-48 rounded-lg bg-foreground object-cover" />
+                  <button onClick={() => setScanning(false)} className="h-10 rounded-lg border border-border font-bold text-sm">{tr("Cancel")}</button>
+                </div>
+              ) : (
+                <button onClick={() => { setScanError(""); setScanning(true); }} className="h-12 rounded-lg bg-primary text-primary-foreground font-bold">{tr("▦ Scan barcode")}</button>
+              )}
+              <form onSubmit={(e) => { e.preventDefault(); check(manual); }} className="flex gap-2">
+                <input value={manual} onChange={(e) => setManual(e.target.value)} placeholder={tag} aria-label={tr("Type tag number")} className="flex-1 h-11 rounded-lg border border-input bg-card px-3 font-mono uppercase" />
+                <button disabled={!manual.trim()} className="h-11 px-4 rounded-lg bg-secondary text-secondary-foreground font-bold text-sm disabled:opacity-40">{tr("Check")}</button>
+              </form>
+              {scanError && <p role="alert" className="text-sm font-semibold text-destructive">{scanError}</p>}
+            </>
+          )}
+        </div>
+
+        <div className="border-t border-border pt-3 flex flex-col gap-2">
+          <p className="text-xs uppercase font-bold tracking-wide">{tr("Equipment photos ({count})", { count: photos.length })}</p>
+          {photos.length > 0 && (
+            <div className="grid grid-cols-3 gap-2">
+              {photos.map((p, i) => (
+                <div key={i} className="relative">
+                  <img src={p} alt={tr("Equipment photo {count}", { count: i + 1 })} className="w-full aspect-square object-cover rounded-lg" />
+                  <button onClick={() => onUpdate({ photos: photos.filter((_, j) => j !== i) })} aria-label={tr("Remove photo")} className="absolute top-1 right-1 h-7 w-7 rounded-full bg-card text-foreground font-bold text-xs">✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <label className="h-12 rounded-lg border-2 border-dashed border-border font-bold text-sm grid place-items-center cursor-pointer">
+            {tr("📷 Add photo of condition")}
+            <input type="file" accept="image/*" capture="environment" multiple className="sr-only" onChange={(e) => { addPhotos(e.target.files); e.target.value = ""; }} />
+          </label>
+        </div>
+
+        <div className="border-t border-border pt-3 flex flex-col gap-2">
+          <p className="text-xs uppercase font-bold tracking-wide">{tr("Equipment condition (optional)")}</p>
+          <div className="flex flex-wrap gap-2">
+            {CONDITIONS.map((c) => (
+              <button
+                key={c}
+                onClick={() => onUpdate(stop.condition === c ? { condition: undefined, conditionNote: undefined } : { condition: c })}
+                aria-pressed={stop.condition === c}
+                className={`text-sm font-bold px-3 py-2 rounded-full border ${stop.condition === c ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border"}`}
+              >
+                {tr(c)}
+              </button>
+            ))}
+          </div>
+          {stop.condition ? (
+            <>
+              <textarea
+                value={stop.conditionNote ?? ""}
+                onChange={(e) => onUpdate({ conditionNote: e.target.value || undefined })}
+                rows={2}
+                aria-label={tr("Condition notes")}
+                placeholder={tr("Add a note (optional)…")}
+                className="w-full rounded-lg border border-input bg-card p-3 text-sm"
+              />
+              <p className="text-xs text-muted-foreground">{tr("Saved: {status}", { status: tr(stop.condition) })}</p>
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">{tr("Optional — skip if there's nothing to report.")}</p>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function StopDetail({ stop, index, onBack, onComplete, onReport, onClearRemark, onUndo, onUpdate }: { stop: Stop; index: number; onBack: () => void; onComplete: () => void; onReport: (remark: string) => void; onClearRemark: () => void; onUndo: () => void; onUpdate: (patch: Partial<Stop>) => void }) {
   const { t: tr, localize, date } = useLanguage();
   const [checked, setChecked] = useState(false);
   const [editingRemark, setEditingRemark] = useState(false);
@@ -318,10 +527,14 @@ function StopDetail({ stop, index, onBack, onComplete, onReport, onClearRemark }
           <p className="mt-2 text-sm">{tr("Site contact:")} <b>{stop.contactName}</b> · <a className="underline font-bold" href={`tel:${stop.contactPhone.replace(/[^0-9+]/g, "")}`}>{stop.contactPhone}</a></p>
         </div>
         <Field label={tr("Equipment")} value={`${localize(stop.equipment)}${stop.qty > 1 ? ` (${tr("qty")} ${stop.qty})` : ""}`} />
+        <EquipmentPanel stop={stop} onUpdate={onUpdate} />
         <Field label={tr("Time window")} value={localize(stop.window)} />
         <div className="mt-auto pt-4 flex flex-col gap-3">
           {stop.completed ? (
-            <div className="rounded-xl bg-success text-success-foreground p-4 font-bold text-center">{tr(`✓ Equipment ${verb}`)}</div>
+            <>
+              <div className="rounded-xl bg-success text-success-foreground p-4 font-bold text-center">{tr(`✓ Equipment ${verb}`)}</div>
+              <button onClick={onUndo} className="min-h-12 px-3 py-2 rounded-lg border-2 border-border bg-card font-bold text-sm">{tr('↩ Undo completion')}</button>
+            </>
           ) : editingRemark ? (
             <div className="rounded-xl border-2 border-accent bg-accent/15 p-4 flex flex-col gap-3">
               <p className="text-xs uppercase font-bold tracking-wide">{tr("⚠ Couldn't complete this stop?")}</p>

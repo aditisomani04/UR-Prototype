@@ -14,7 +14,27 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      stop_progress: {
+        Row: {
+          data: Json
+          driver_id: string
+          stop_id: string
+          updated_at: string
+        }
+        Insert: {
+          data?: Json
+          driver_id: string
+          stop_id: string
+          updated_at?: string
+        }
+        Update: {
+          data?: Json
+          driver_id?: string
+          stop_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
