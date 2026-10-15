@@ -1,5 +1,6 @@
 import { defineTool } from "@lovable.dev/mcp-js";
-import { days, initialTrips } from "../../trips";
+import { days } from "../../trips";
+import { initialTrips } from "../../schedule-data";
 
 export default defineTool({
   name: "list_schedule",

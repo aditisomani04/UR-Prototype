@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1792038072658,
+      "tag": "0000_driver_progress",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792041981224,
+      "tag": "0001_private_stop_progress",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792042541841,
+      "tag": "0002_restore_sample_driver_progress_access",
+      "breakpoints": true
+    }
+  ]
+}

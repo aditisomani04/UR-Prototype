@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { BRANCH, initialTrips, mapsBranchUrl, mapsRouteUrl } from "./trips";
+import { BRANCH, mapsBranchUrl, mapsRouteUrl } from "./trips";
+import { initialTrips } from "./schedule-data";
 
 describe("Google Maps trip links", () => {
   it("includes every trip stop in displayed order within the mobile waypoint limit", () => {

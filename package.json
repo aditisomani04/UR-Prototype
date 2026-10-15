@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
+    "@lovable.dev/cloud-auth-js": "^1.1.2",
     "@lovable.dev/mcp-js": "^3.0.6",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@radix-ui/react-accordion": "^1.2.12",
@@ -103,6 +104,7 @@
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.56.1",
     "vite": "8.1.5",
+    "vite-plugin-pwa": "^2.0.0",
     "vitest": "^4.1.10"
   }
 }

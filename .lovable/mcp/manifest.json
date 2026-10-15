@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "sdk_version": "3.0.6",
+  "path": "/mcp",
+  "auth": {
+    "type": "none"
+  },
+  "mcp": {
+    "server": {
+      "name": "ur-driver-s-delight",
+      "version": "0.1.0",
+      "title": "UR Driver's Delight"
+    },
+    "tools": [
+      {
+        "name": "list_schedule",
+        "title": "List weekly schedule",
+        "description": "List the sample Mon–Fri schedule with each day's trips and stop counts.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "get_trip",
+        "title": "Get trip details",
+        "description": "Get a trip's stops in route order: stop type, customer, address, equipment, contact and time window.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "tripId": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Trip ID from list_schedule."
+            }
+          },
+          "required": [
+            "tripId"
+          ],
+          "additionalProperties": false
+        },
+        "outputSchema": null
+      }
+    ]
+  }
+}

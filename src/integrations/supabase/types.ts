@@ -20,18 +20,21 @@ export type Database = {
           driver_id: string
           stop_id: string
           updated_at: string
+          user_id: string | null
         }
         Insert: {
           data?: Json
           driver_id: string
           stop_id: string
           updated_at?: string
+          user_id?: string | null
         }
         Update: {
           data?: Json
           driver_id?: string
           stop_id?: string
           updated_at?: string
+          user_id?: string | null
         }
         Relationships: []
       }

@@ -1,0 +1,11 @@
+ALTER TABLE public.stop_progress ADD COLUMN IF NOT EXISTS user_id uuid DEFAULT auth.uid();
+DROP POLICY IF EXISTS "Prototype drivers manage progress" ON public.stop_progress;
+REVOKE ALL ON public.stop_progress FROM anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.stop_progress TO authenticated;
+GRANT ALL ON public.stop_progress TO service_role;
+ALTER TABLE public.stop_progress ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Drivers read own progress" ON public.stop_progress FOR SELECT TO authenticated USING (user_id = auth.uid() AND driver_id = auth.uid()::text);
+CREATE POLICY "Drivers insert own progress" ON public.stop_progress FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid() AND driver_id = auth.uid()::text);
+CREATE POLICY "Drivers update own progress" ON public.stop_progress FOR UPDATE TO authenticated USING (user_id = auth.uid() AND driver_id = auth.uid()::text) WITH CHECK (user_id = auth.uid() AND driver_id = auth.uid()::text);
+CREATE POLICY "Drivers delete own progress" ON public.stop_progress FOR DELETE TO authenticated USING (user_id = auth.uid() AND driver_id = auth.uid()::text);
+COMMENT ON COLUMN public.stop_progress.driver_id IS 'Holds the signed-in account id as text; legacy sample-driver rows are no longer readable.';

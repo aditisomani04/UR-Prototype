@@ -1,11 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
-import { useEffect, useRef, useState } from "react";
+import { cachedProgress, clearLocal, fetchProgress, flush, pendingCount, saveLocal } from "@/lib/offline-sync";
+import { useContext, useEffect, useRef, useState } from "react";
 import { equipmentInfo, assetTag } from "@/lib/equipment";
 import { useWebMCP } from "use-webmcp-tool";
 import { runWebMCPTool } from "@/lib/webmcp-telemetry";
 import { LanguageContext, languages, isLanguage, useLanguage, translate, type Language } from "@/lib/language";
-import { initialTrips, drivers, days, mapsRouteUrl, mapsStopUrl, mapsBranchUrl, type Trip, type Stop, type Driver } from "@/lib/trips";
+import { days, drivers, mapsRouteUrl, mapsStopUrl, mapsBranchUrl, type Trip, type Stop, type Driver } from "@/lib/trips";
+import { initialTrips } from "@/lib/schedule-data";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -39,32 +41,57 @@ function App() {
   };
   const [view, setView] = useState<View>({ name: "login" });
   const [driver, setDriver] = useState<Driver | null>(null);
-  const [trips, setTrips] = useState<Trip[]>(initialTrips);
+  const [base] = useState<Trip[]>(initialTrips);
+  const [trips, setTrips] = useState<Trip[]>([]);
   const [returned, setReturned] = useState<Record<string, boolean>>({});
   const [dayId, setDayId] = useState("mon");
+  const baseRef = useRef(base);
+  baseRef.current = base;
   const tripsRef = useRef(trips);
   tripsRef.current = trips;
 
-  // Restore this driver's saved progress after sign-in.
+  const [online, setOnline] = useState(true);
+  const [pending, setPending] = useState(0);
+
+  const applyProgress = (saved: Record<string, Partial<Stop> & { returned?: boolean }>) => {
+    setTrips(baseRef.current.map((t) => ({ ...t, stops: t.stops.map((s) => ({ ...s, ...(saved[s.id] ?? {}) })) })));
+    const r: Record<string, boolean> = {};
+    for (const t of baseRef.current) if (saved[`return:${t.id}`]?.returned) r[t.id] = true;
+    setReturned(r);
+  };
+
+  const sync = async (driverId: string) => { setPending(await flush(driverId)); };
+
+  // Track connection; push queued changes as soon as we're back online.
   useEffect(() => {
-    if (!driver) { setTrips(initialTrips); setReturned({}); return; }
-    let cancelled = false;
-    supabase.from("stop_progress").select("stop_id, data").eq("driver_id", driver.id).then(({ data }) => {
-      if (cancelled || !data) return;
-      const saved = new Map(data.map((r) => [r.stop_id, r.data as Partial<Stop> & { returned?: boolean }]));
-      setTrips(initialTrips.map((t) => ({ ...t, stops: t.stops.map((s) => ({ ...s, ...(saved.get(s.id) ?? {}) })) })));
-      const r: Record<string, boolean> = {};
-      for (const t of initialTrips) if (saved.get(`return:${t.id}`)?.returned) r[t.id] = true;
-      setReturned(r);
-    });
-    return () => { cancelled = true; };
+    setOnline(navigator.onLine);
+    const up = () => { setOnline(true); if (driver) void sync(driver.id); };
+    const down = () => setOnline(false);
+    window.addEventListener("online", up);
+    window.addEventListener("offline", down);
+    const timer = window.setInterval(() => { if (driver && navigator.onLine) void sync(driver.id); }, 30000);
+    return () => { window.removeEventListener("online", up); window.removeEventListener("offline", down); window.clearInterval(timer); };
   }, [driver]);
+
+  // Restore this driver's progress: device copy first (works offline), then the database.
+  useEffect(() => {
+    if (!driver || !base.length) { setTrips(base); setReturned({}); return; }
+    let cancelled = false;
+    applyProgress(cachedProgress(driver.id) as never);
+    setPending(pendingCount(driver.id));
+    void (async () => {
+      await sync(driver.id);
+      const data = await fetchProgress(driver.id);
+      if (!cancelled && data) applyProgress(data as never);
+    })();
+    return () => { cancelled = true; };
+  }, [driver, base]);
 
   const save = (stopId: string, data: Record<string, unknown>) => {
     if (!driver) return;
-    void supabase.from("stop_progress").upsert({ driver_id: driver.id, stop_id: stopId, data: data as never, updated_at: new Date().toISOString() }).then(({ error }) => {
-      if (error) console.error("Could not save progress", error.message);
-    });
+    saveLocal(driver.id, stopId, data);
+    setPending(pendingCount(driver.id));
+    void sync(driver.id);
   };
 
   const updateStop = (tripId: string, stopId: string, patch: Partial<Stop>) => {
@@ -83,9 +110,12 @@ function App() {
 
   const resetProgress = async () => {
     if (!driver) return;
+    if (!navigator.onLine) { window.alert(translate(language, "Reset needs a connection.")); return; }
     const { error } = await supabase.from("stop_progress").delete().eq("driver_id", driver.id);
     if (error) { console.error("Could not reset progress", error.message); return; }
-    setTrips(initialTrips);
+    clearLocal(driver.id);
+    setPending(0);
+    setTrips(base);
     setReturned({});
     setView({ name: "trips" });
   };
@@ -103,12 +133,20 @@ function App() {
             </select>
           </label>
         </div>
+        {driver && (!online || pending > 0) && (
+          <div role="status" className={`px-6 py-2 text-sm font-semibold border-b border-border ${online ? "bg-secondary text-secondary-foreground" : "bg-destructive text-destructive-foreground"}`}>
+            {!online
+              ? translate(language, "Offline — changes are saved on this phone and will sync when you're back online.") + (pending ? ` (${translate(language, "{count} waiting", { count: pending })})` : "")
+              : translate(language, "Syncing {count} change(s)…", { count: pending })}
+          </div>
+        )}
         {view.name === "login" && <Login onLogin={(d) => { setDriver(d); setView({ name: "trips" }); }} />}
+        {driver && view.name !== "login" && !trips.length && <p className="p-6 text-muted-foreground">{translate(language, "Loading your schedule…")}</p>}
         {view.name === "trips" && <TripList trips={trips.filter((t) => t.dayId === dayId)} allTrips={trips} dayId={dayId} onDay={setDayId} returned={returned} driver={driver} onOpen={(id) => setView({ name: "trip", tripId: id })} onLogout={() => { setDriver(null); setView({ name: "login" }); }} onReset={resetProgress} />}
         {view.name === "trip" && (() => {
           const trip = trips.find((t) => t.id === view.tripId);
           if (!trip) return null;
-          return <TripDetail trip={trip} returned={!!returned[trip.id]} onBack={() => setView({ name: "trips" })} onStop={(sid) => setView({ name: "stop", tripId: trip.id, stopId: sid })} onReturn={() => setReturned((r) => ({ ...r, [trip.id]: true }))} />;
+          return <TripDetail trip={trip} returned={!!returned[trip.id]} onBack={() => setView({ name: "trips" })} onStop={(sid) => setView({ name: "stop", tripId: trip.id, stopId: sid })} onReturn={() => markReturned(trip.id)} />;
         })()}
         {view.name === "stop" && (() => {
           const trip = trips.find((t) => t.id === view.tripId);
@@ -138,42 +176,41 @@ function Header({ title, sub, onBack, right }: { title: string; sub?: string | u
 }
 
 function Login({ onLogin }: { onLogin: (d: Driver) => void }) {
-  const { t: tr, localize, date } = useLanguage();
-  const [id, setId] = useState("D-1042");
+  const { t: tr } = useLanguage();
+  const [id, setId] = useState("");
   const [pw, setPw] = useState("password");
   const [error, setError] = useState("");
-  const matched = drivers.find((d) => d.id.toLowerCase() === id.trim().toLowerCase());
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault(); setError("");
+    const d = drivers.find((x) => x.id.toLowerCase() === id.trim().toLowerCase());
+    if (!d) { setError("Unknown driver ID — pick a sample driver below."); return; }
+    if (d.password !== pw) { setError("Incorrect password."); return; }
+    onLogin({ id: d.id, name: d.name, email: d.email, truck: d.truck });
+  };
+  const input = "mt-1 w-full h-12 rounded-lg border border-input bg-card px-4 text-base";
   return (
     <div className="flex-1 flex flex-col justify-center px-6 gap-6 py-10">
       <div>
         <div className="h-14 w-14 rounded-xl bg-accent text-accent-foreground grid place-items-center text-2xl font-black">🚚</div>
-        <h1 className="mt-5 text-3xl font-extrabold">{tr('Driver sign in')}</h1>
+        <h1 className="mt-5 text-3xl font-extrabold">{tr("Driver sign in")}</h1>
         <p className="text-muted-foreground mt-1">{tr("View today's deliveries and pickups.")}</p>
       </div>
-      <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); if (matched) { setError(""); onLogin(matched); } else setError("Unknown driver ID — pick a sample driver below."); }}>
-        <label className="text-sm font-semibold">{tr("Driver ID")}
-          <input value={id} onChange={(e) => { setId(e.target.value); setError(""); }} className="mt-1 w-full h-12 rounded-lg border border-input bg-card px-4 text-base" />
-        </label>
-        <label className="text-sm font-semibold">{tr("Password")}
-          <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} className="mt-1 w-full h-12 rounded-lg border border-input bg-card px-4 text-base" />
-        </label>
+      <form className="flex flex-col gap-4" onSubmit={submit}>
+        <label className="text-sm font-semibold">{tr("Driver ID")}<input required value={id} onChange={(e) => setId(e.target.value)} className={input} placeholder="D-1042" autoComplete="username" /></label>
+        <label className="text-sm font-semibold">{tr("Password")}<input required type="password" value={pw} onChange={(e) => setPw(e.target.value)} className={input} autoComplete="current-password" /></label>
         {error && <p role="alert" className="text-sm font-semibold text-destructive">{tr(error)}</p>}
-        <button className="min-h-14 px-3 py-2 rounded-lg bg-primary text-primary-foreground font-bold text-lg mt-2">{tr('Sign in')}</button>
+        <button className="min-h-14 px-3 py-2 rounded-lg bg-primary text-primary-foreground font-bold text-lg mt-2">{tr("Sign in")}</button>
       </form>
       <div>
-        <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-2">{tr('Sample drivers')}</p>
-        <div className="flex flex-col gap-2">
+        <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">{tr("Sample drivers")}</p>
+        <div className="mt-2 flex flex-col gap-1">
           {drivers.map((d) => (
-            <button key={d.id} onClick={() => { setId(d.id); setError(""); }} className={`text-left rounded-xl border p-3 flex items-center gap-3 transition ${matched?.id === d.id ? "border-primary border-2 bg-card shadow-sm" : "border-border bg-card"}`}>
-              <span className="h-10 w-10 rounded-full bg-secondary text-secondary-foreground grid place-items-center font-black text-sm">{d.name.split(" ").map((w) => w[0]).join("")}</span>
-              <span className="flex-1">
-                <span className="block font-bold">{d.name}</span>
-                <span className="block text-xs text-muted-foreground">{d.id} · {localize(d.truck)}</span>
-              </span>
-              {matched?.id === d.id && <span className="text-primary font-bold">✓</span>}
+            <button key={d.id} type="button" onClick={() => { setId(d.id); setPw(d.password); setError(""); }} className="flex justify-between rounded-lg border border-border bg-card px-3 py-2 text-sm">
+              <span className="font-semibold">{d.name}</span><span className="font-mono text-muted-foreground">{d.id} · 🚛 {d.truck}</span>
             </button>
           ))}
         </div>
+        <p className="mt-1 text-xs text-muted-foreground">{tr('Password for all samples: "password"')}</p>
       </div>
     </div>
   );
@@ -191,7 +228,7 @@ function TripList({ trips, allTrips, dayId, onDay, returned, driver, onOpen, onL
   const { t: tr, localize, date } = useLanguage();
   return (
     <>
-      <Header title={tr("Weekly schedule")} sub={driver ? `${driver.name} · ${driver.id} · ${localize(driver.truck)}` : undefined} right={<div className="flex items-center gap-3"><button onClick={onReset} className="text-sm opacity-90 underline">{tr("Reset progress")}</button><button onClick={onLogout} className="text-sm opacity-90">{tr('Sign out')}</button></div>} />
+      <Header title={tr("Weekly schedule")} sub={driver ? `${driver.name} · 🚛 ${driver.truck ?? driver.id}` : undefined} right={<div className="flex items-center gap-3"><button onClick={onReset} className="text-sm opacity-90 underline">{tr("Reset progress")}</button><button onClick={onLogout} className="text-sm opacity-90">{tr('Sign out')}</button></div>} />
       <nav className="grid grid-cols-5 gap-1 p-3 border-b border-border bg-card">
         {days.map((d) => {
           const dt = allTrips.filter((t) => t.dayId === d.id);
@@ -506,6 +543,7 @@ function EquipmentPanel({ stop, onUpdate }: { stop: Stop; onUpdate: (patch: Part
 
 function StopDetail({ stop, index, onBack, onComplete, onReport, onClearRemark, onUndo, onUpdate }: { stop: Stop; index: number; onBack: () => void; onComplete: () => void; onReport: (remark: string) => void; onClearRemark: () => void; onUndo: () => void; onUpdate: (patch: Partial<Stop>) => void }) {
   const { t: tr, localize, date } = useLanguage();
+  const language = useContext(LanguageContext);
   const [checked, setChecked] = useState(false);
   const [editingRemark, setEditingRemark] = useState(false);
   const [draft, setDraft] = useState("");
@@ -523,7 +561,7 @@ function StopDetail({ stop, index, onBack, onComplete, onReport, onClearRemark, 
         </div>
         <div className="rounded-xl border-2 border-accent bg-accent/15 p-4">
           <p className="text-xs uppercase font-bold tracking-wide">{tr('⚠ Site instructions')}</p>
-          <p className="mt-1 font-semibold">{tr(stop.notes)}</p>
+          <p className="mt-1 font-semibold">{(language === "en" || !stop.notesI18n) ? stop.notes : stop.notesI18n[language === "es" ? 0 : 1]}</p>
           <p className="mt-2 text-sm">{tr("Site contact:")} <b>{stop.contactName}</b> · <a className="underline font-bold" href={`tel:${stop.contactPhone.replace(/[^0-9+]/g, "")}`}>{stop.contactPhone}</a></p>
         </div>
         <Field label={tr("Equipment")} value={`${localize(stop.equipment)}${stop.qty > 1 ? ` (${tr("qty")} ${stop.qty})` : ""}`} />

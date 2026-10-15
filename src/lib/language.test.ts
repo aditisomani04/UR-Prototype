@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialTrips } from "./trips";
+import { initialTrips } from "./schedule-data";
 import { isLanguage, translate } from "./language";
 
 describe("driver language", () => {
@@ -13,8 +13,9 @@ describe("driver language", () => {
   it("translates every sample site instruction in both added languages", () => {
     for (const trip of initialTrips) {
       for (const stop of trip.stops) {
-        expect(translate("es", stop.notes)).not.toBe(stop.notes);
-        expect(translate("hi", stop.notes)).not.toBe(stop.notes);
+        expect(stop.notesI18n?.[0]).toBeTruthy();
+        expect(stop.notesI18n?.[0]).not.toBe(stop.notes);
+        expect(stop.notesI18n?.[1]).not.toBe(stop.notes);
       }
     }
   });
