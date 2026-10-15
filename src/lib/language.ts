@@ -208,6 +208,9 @@ const messages: Record<string, readonly [string, string]> = {
   "Air Compressor": ["Compresor de aire", "एयर कंप्रेसर"],
   "Generator": ["Generador", "जनरेटर"],
   "Trench Shoring Box": ["Caja de entibación", "ट्रेंच शोरिंग बॉक्स"],
+  "Trip complete!": ["¡Viaje completo!", "यात्रा पूरी होई!"],
+  "Nice work — every stop is handled.": ["¡Buen trabajo! Todas las paradas quedaron resueltas.", "बहोत बड़िया — सभी स्टॉप पूरे हुए।"],
+  "Done": ["Listo", "पूरा"],
 };
 
 

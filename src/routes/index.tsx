@@ -8,6 +8,7 @@ import { runWebMCPTool } from "@/lib/webmcp-telemetry";
 import { LanguageContext, languages, isLanguage, useLanguage, translate, type Language } from "@/lib/language";
 import { days, drivers, mapsRouteUrl, mapsStopUrl, mapsBranchUrl, type Trip, type Stop, type Driver } from "@/lib/trips";
 import { initialTrips } from "@/lib/schedule-data";
+import { Celebration } from "@/components/celebration";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -45,6 +46,7 @@ function App() {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [returned, setReturned] = useState<Record<string, boolean>>({});
   const [dayId, setDayId] = useState("mon");
+  const [celebrate, setCelebrate] = useState(false);
   const baseRef = useRef(base);
   baseRef.current = base;
   const tripsRef = useRef(trips);
@@ -146,7 +148,7 @@ function App() {
         {view.name === "trip" && (() => {
           const trip = trips.find((t) => t.id === view.tripId);
           if (!trip) return null;
-          return <TripDetail trip={trip} returned={!!returned[trip.id]} onBack={() => setView({ name: "trips" })} onStop={(sid) => setView({ name: "stop", tripId: trip.id, stopId: sid })} onReturn={() => markReturned(trip.id)} />;
+          return <TripDetail trip={trip} returned={!!returned[trip.id]} onBack={() => setView({ name: "trips" })} onStop={(sid) => setView({ name: "stop", tripId: trip.id, stopId: sid })} onReturn={() => { markReturned(trip.id); setCelebrate(true); }} />;
         })()}
         {view.name === "stop" && (() => {
           const trip = trips.find((t) => t.id === view.tripId);
@@ -155,6 +157,7 @@ function App() {
           if (!stop) return null;
           return <StopDetail stop={stop} index={trip.stops.indexOf(stop) + 1} onBack={() => setView({ name: "trip", tripId: trip.id })} onComplete={() => { complete(trip.id, stop.id); setView({ name: "trip", tripId: trip.id }); }} onReport={(remark) => reportStop(trip.id, stop.id, remark)} onClearRemark={() => clearStopRemark(trip.id, stop.id)} onUndo={() => uncomplete(trip.id, stop.id)} onUpdate={(patch) => updateStop(trip.id, stop.id, patch)} />;
         })()}
+        {celebrate && <Celebration onDismiss={() => setCelebrate(false)} />}
       </div>
     </div>
     </LanguageContext.Provider>
