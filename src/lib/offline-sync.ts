@@ -11,8 +11,8 @@ const queueKey = (driverId: string) => `driver-progress-queue:${driverId}`;
 function read<T>(key: string, fallback: T): T {
   try { const raw = localStorage.getItem(key); return raw ? (JSON.parse(raw) as T) : fallback; } catch { return fallback; }
 }
-function write(key: string, value: unknown) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage full or unavailable */ }
+function write(key: string, value: unknown): boolean {
+  try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; }
 }
 
 export function cachedProgress(driverId: string): Record<string, ProgressData> {
@@ -22,13 +22,21 @@ export function pendingCount(driverId: string): number {
   return Object.keys(read<Pending>(queueKey(driverId), {})).length;
 }
 
-export function saveLocal(driverId: string, stopId: string, data: ProgressData) {
-  const cache = cachedProgress(driverId);
-  cache[stopId] = data;
-  write(cacheKey(driverId), cache);
-  const queue = read<Pending>(queueKey(driverId), {});
-  queue[stopId] = { data, updated_at: new Date().toISOString() };
-  write(queueKey(driverId), queue);
+/** Returns false if the device storage is full; in that case the change is
+ * retried without photos so completions/remarks are never silently lost. */
+export function saveLocal(driverId: string, stopId: string, data: ProgressData): boolean {
+  const attempt = (d: ProgressData) => {
+    const cache = cachedProgress(driverId);
+    cache[stopId] = d;
+    const queue = read<Pending>(queueKey(driverId), {});
+    queue[stopId] = { data: d, updated_at: new Date().toISOString() };
+    const q = write(queueKey(driverId), queue);
+    const c = write(cacheKey(driverId), cache);
+    return q && c;
+  };
+  if (attempt(data)) return true;
+  if (Array.isArray(data["photos"]) && data["photos"].length) attempt({ ...data, photos: [] });
+  return false;
 }
 
 /** Push queued changes. Returns remaining pending count. */

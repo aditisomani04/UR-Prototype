@@ -91,7 +91,7 @@ function App() {
 
   const save = (stopId: string, data: Record<string, unknown>) => {
     if (!driver) return;
-    saveLocal(driver.id, stopId, data);
+    if (!saveLocal(driver.id, stopId, data)) window.alert(translate(language, "Phone storage is full — photos could not be saved, but stop progress was."));
     setPending(pendingCount(driver.id));
     void sync(driver.id);
   };
@@ -155,7 +155,8 @@ function App() {
           if (!trip) return null;
           const stop = trip.stops.find((s) => s.id === view.stopId);
           if (!stop) return null;
-          return <StopDetail stop={stop} index={trip.stops.indexOf(stop) + 1} onBack={() => setView({ name: "trip", tripId: trip.id })} onComplete={() => { complete(trip.id, stop.id); setView({ name: "trip", tripId: trip.id }); }} onReport={(remark) => reportStop(trip.id, stop.id, remark)} onClearRemark={() => clearStopRemark(trip.id, stop.id)} onUndo={() => uncomplete(trip.id, stop.id)} onUpdate={(patch) => updateStop(trip.id, stop.id, patch)} />;
+          const nextStop = trip.stops.find((s) => s.id !== stop.id && !s.completed && !s.remark);
+          return <StopDetail key={stop.id} stop={stop} index={trip.stops.indexOf(stop) + 1} next={nextStop ? { index: trip.stops.indexOf(nextStop) + 1, name: nextStop.customer } : null} onNext={() => { setView(nextStop ? { name: "stop", tripId: trip.id, stopId: nextStop.id } : { name: "trip", tripId: trip.id }); window.scrollTo({ top: 0 }); }} onBack={() => setView({ name: "trip", tripId: trip.id })} onComplete={() => complete(trip.id, stop.id)} onReport={(remark) => reportStop(trip.id, stop.id, remark)} onClearRemark={() => clearStopRemark(trip.id, stop.id)} onUndo={() => uncomplete(trip.id, stop.id)} onUpdate={(patch) => updateStop(trip.id, stop.id, patch)} />;
         })()}
         {celebrate && <Celebration onDismiss={() => setCelebrate(false)} />}
       </div>
@@ -196,7 +197,7 @@ function Login({ onLogin }: { onLogin: (d: Driver) => void }) {
       <div>
         <div className="h-14 w-14 rounded-xl bg-accent text-accent-foreground grid place-items-center text-2xl font-black">🚚</div>
         <h1 className="mt-5 text-3xl font-extrabold">{tr("Driver sign in")}</h1>
-        <p className="text-muted-foreground mt-1">{tr("View today's deliveries and pickups.")}</p>
+        <p className="text-muted-foreground mt-1">{tr("View deliveries and pickups.")}</p>
       </div>
       <form className="flex flex-col gap-4" onSubmit={submit}>
         <label className="text-sm font-semibold">{tr("Driver ID")}<input required value={id} onChange={(e) => setId(e.target.value)} className={input} placeholder="D-1042" autoComplete="username" /></label>
@@ -441,10 +442,11 @@ function EquipmentPanel({ stop, onUpdate }: { stop: Stop; onUpdate: (patch: Part
 
   const addPhotos = (files: FileList | null) => {
     if (!files) return;
-    Array.from(files).forEach((f) => {
-      const reader = new FileReader();
-      reader.onload = () => onUpdate({ photos: [...(stop.photos ?? []), String(reader.result)] });
-      reader.readAsDataURL(f);
+    const list = Array.from(files);
+    const existing = stop.photos ?? [];
+    void Promise.all(list.map(shrinkPhoto)).then((shots) => {
+      const added = shots.filter((s): s is string => !!s);
+      if (added.length) onUpdate({ photos: [...existing, ...added] });
     });
   };
 
@@ -544,7 +546,7 @@ function EquipmentPanel({ stop, onUpdate }: { stop: Stop; onUpdate: (patch: Part
   );
 }
 
-function StopDetail({ stop, index, onBack, onComplete, onReport, onClearRemark, onUndo, onUpdate }: { stop: Stop; index: number; onBack: () => void; onComplete: () => void; onReport: (remark: string) => void; onClearRemark: () => void; onUndo: () => void; onUpdate: (patch: Partial<Stop>) => void }) {
+function StopDetail({ stop, index, next, onNext, onBack, onComplete, onReport, onClearRemark, onUndo, onUpdate }: { stop: Stop; index: number; next: { index: number; name: string } | null; onNext: () => void; onBack: () => void; onComplete: () => void; onReport: (remark: string) => void; onClearRemark: () => void; onUndo: () => void; onUpdate: (patch: Partial<Stop>) => void }) {
   const { t: tr, localize, date } = useLanguage();
   const language = useContext(LanguageContext);
   const [checked, setChecked] = useState(false);
@@ -574,6 +576,10 @@ function StopDetail({ stop, index, onBack, onComplete, onReport, onClearRemark, 
           {stop.completed ? (
             <>
               <div className="rounded-xl bg-success text-success-foreground p-4 font-bold text-center">{tr(`✓ Equipment ${verb}`)}</div>
+              <button onClick={onNext} className="min-h-16 px-4 py-3 rounded-xl bg-primary text-primary-foreground font-extrabold text-xl shadow-lg flex flex-col items-center">
+                <span>{next ? tr("Next stop →") : tr("All stops handled — back to trip →")}</span>
+                {next && <span className="text-sm font-semibold opacity-90">{tr("Up next: Stop {n} · {name}", { n: next.index, name: next.name })}</span>}
+              </button>
               <button onClick={onUndo} className="min-h-12 px-3 py-2 rounded-lg border-2 border-border bg-card font-bold text-sm">{tr('↩ Undo completion')}</button>
             </>
           ) : editingRemark ? (
@@ -591,14 +597,20 @@ function StopDetail({ stop, index, onBack, onComplete, onReport, onClearRemark, 
               </div>
             </div>
           ) : stop.remark ? (
-            <div className="rounded-xl border-2 border-accent bg-accent/15 p-4">
-              <p className="text-xs uppercase font-bold tracking-wide">{tr('⚠ Issue reported — not completed')}</p>
-              <p className="mt-1 font-semibold">{tr(stop.remark)}</p>
-              <div className="flex flex-wrap gap-2 mt-3">
-                <button onClick={() => { setDraft(stop.remark ?? ""); setEditingRemark(true); }} className="flex-1 h-11 rounded-lg bg-secondary text-secondary-foreground font-bold text-sm">{tr('Edit remark')}</button>
-                <button onClick={onClearRemark} className="flex-1 h-11 rounded-lg bg-card border border-border font-bold text-sm">{tr('Clear & retry')}</button>
+            <>
+              <div className="rounded-xl border-2 border-accent bg-accent/15 p-4">
+                <p className="text-xs uppercase font-bold tracking-wide">{tr('⚠ Issue reported — not completed')}</p>
+                <p className="mt-1 font-semibold">{tr(stop.remark)}</p>
+                <div className="flex flex-wrap gap-2 mt-3">
+                  <button onClick={() => { setDraft(stop.remark ?? ""); setEditingRemark(true); }} className="flex-1 h-11 rounded-lg bg-secondary text-secondary-foreground font-bold text-sm">{tr('Edit remark')}</button>
+                  <button onClick={onClearRemark} className="flex-1 h-11 rounded-lg bg-card border border-border font-bold text-sm">{tr('Clear & retry')}</button>
+                </div>
               </div>
-            </div>
+              <button onClick={onNext} className="min-h-16 px-4 py-3 rounded-xl bg-primary text-primary-foreground font-extrabold text-xl shadow-lg flex flex-col items-center">
+                <span>{next ? tr("Next stop →") : tr("All stops handled — back to trip →")}</span>
+                {next && <span className="text-sm font-semibold opacity-90">{tr("Up next: Stop {n} · {name}", { n: next.index, name: next.name })}</span>}
+              </button>
+            </>
           ) : (
             <>
               <label className="flex items-center gap-3 rounded-xl border border-border p-4">
@@ -626,4 +638,24 @@ function Field({ label, value }: { label: string; value: string }) {
       <p className="text-lg font-semibold">{value}</p>
     </div>
   );
+}
+
+/** Downscale a camera photo to a small JPEG so it fits in phone storage. */
+function shrinkPhoto(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const max = 800;
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d")?.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", 0.6));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+    img.src = url;
+  });
 }
