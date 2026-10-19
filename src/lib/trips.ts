@@ -25,6 +25,10 @@ export type Stop = {
   condition?: string | undefined;
   /** Optional free-text detail about the condition. */
   conditionNote?: string | undefined;
+  /** Pickup only: fuel gauge level reported by the driver. */
+  fuelLevel?: string | undefined;
+  /** Pickup only: engine hour-meter reading, as typed. */
+  hourMeter?: string | undefined;
 };
 export type Trip = { id: string; dayId: string; name: string; branch: string; date: string; stops: Stop[]; miles: number };
 export type Day = { id: string; short: string; label: string; date: string };

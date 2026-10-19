@@ -9,6 +9,11 @@ import { LanguageContext, languages, isLanguage, useLanguage, translate, type La
 import { days, drivers, mapsRouteUrl, mapsStopUrl, mapsBranchUrl, type Trip, type Stop, type Driver } from "@/lib/trips";
 import { initialTrips } from "@/lib/schedule-data";
 import { Celebration } from "@/components/celebration";
+import { Button } from "@/components/ui/button";
+import { DriverClockProvider, TimeWindowWarning, useDriverClock } from "@/components/time-window-warning";
+import { nextTripId, canEditDay, isDayComplete } from "@/lib/trip-guidance";
+import { ArrowRight, SquareCheck, LockKeyhole } from "lucide-react";
+import { celebrationSummary, type CelebrationSummary } from "@/lib/celebration-summary";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -21,8 +26,19 @@ export const Route = createFileRoute("/")({
       { name: "twitter:card", content: "summary" },
     ],
   }),
-  component: App,
+  component: DriverApp,
 });
+
+function DriverApp() {
+  return <DriverClockProvider><App /></DriverClockProvider>;
+}
+
+function DayAccessNotice({ dayId }: { dayId: string }) {
+  const now = useDriverClock();
+  const { t, date } = useLanguage();
+  if (canEditDay(dayId, now)) return null;
+  return <p role="status" className="flex items-start gap-2 rounded-md bg-muted p-3 text-sm font-semibold text-muted-foreground"><LockKeyhole className="size-4 shrink-0 mt-0.5" aria-hidden="true" />{t("View only — updates unlock on {date} (branch time).", { date: date(dayId) })}</p>;
+}
 
 type View = { name: "login" } | { name: "trips" } | { name: "trip"; tripId: string } | { name: "stop"; tripId: string; stopId: string };
 
@@ -46,7 +62,7 @@ function App() {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [returned, setReturned] = useState<Record<string, boolean>>({});
   const [dayId, setDayId] = useState("mon");
-  const [celebrate, setCelebrate] = useState(false);
+  const [celebrate, setCelebrate] = useState<CelebrationSummary | null>(null);
   const baseRef = useRef(base);
   baseRef.current = base;
   const tripsRef = useRef(trips);
@@ -97,10 +113,12 @@ function App() {
   };
 
   const updateStop = (tripId: string, stopId: string, patch: Partial<Stop>) => {
+    const trip = tripsRef.current.find((t) => t.id === tripId);
+    if (!trip || !canEditDay(trip.dayId, new Date())) return;
     const current = tripsRef.current.find((t) => t.id === tripId)?.stops.find((s) => s.id === stopId);
     if (current) {
       const next = { ...current, ...patch };
-      save(stopId, { completed: next.completed, remark: next.remark ?? null, scannedTag: next.scannedTag ?? null, photos: next.photos ?? [], condition: next.condition ?? null, conditionNote: next.conditionNote ?? null });
+      save(stopId, { completed: next.completed, remark: next.remark ?? null, scannedTag: next.scannedTag ?? null, photos: next.photos ?? [], condition: next.condition ?? null, conditionNote: next.conditionNote ?? null, fuelLevel: next.fuelLevel ?? null, hourMeter: next.hourMeter ?? null });
     }
     setTrips((ts) => ts.map((t) => (t.id !== tripId ? t : { ...t, stops: t.stops.map((s) => (s.id === stopId ? { ...s, ...patch } : s)) })));
   };
@@ -108,7 +126,12 @@ function App() {
   const uncomplete = (tripId: string, stopId: string) => updateStop(tripId, stopId, { completed: false });
   const reportStop = (tripId: string, stopId: string, remark: string) => updateStop(tripId, stopId, { remark });
   const clearStopRemark = (tripId: string, stopId: string) => updateStop(tripId, stopId, { remark: undefined });
-  const markReturned = (tripId: string) => { setReturned((r) => ({ ...r, [tripId]: true })); save(`return:${tripId}`, { returned: true }); };
+  const markReturned = (tripId: string) => {
+    const trip = tripsRef.current.find((t) => t.id === tripId);
+    if (!trip || !canEditDay(trip.dayId, new Date()) || !trip.stops.every((s) => s.completed || s.remark)) return false;
+    setReturned((r) => ({ ...r, [tripId]: true })); save(`return:${tripId}`, { returned: true });
+    return true;
+  };
 
   const resetProgress = async () => {
     if (!driver) return;
@@ -148,7 +171,7 @@ function App() {
         {view.name === "trip" && (() => {
           const trip = trips.find((t) => t.id === view.tripId);
           if (!trip) return null;
-          return <TripDetail trip={trip} returned={!!returned[trip.id]} onBack={() => setView({ name: "trips" })} onStop={(sid) => setView({ name: "stop", tripId: trip.id, stopId: sid })} onReturn={() => { markReturned(trip.id); setCelebrate(true); }} />;
+          return <TripDetail trip={trip} returned={!!returned[trip.id]} onBack={() => setView({ name: "trips" })} onStop={(sid) => setView({ name: "stop", tripId: trip.id, stopId: sid })} onReturn={() => { if (markReturned(trip.id)) setCelebrate(celebrationSummary(trips, trip.id, { ...returned, [trip.id]: true })); }} />;
         })()}
         {view.name === "stop" && (() => {
           const trip = trips.find((t) => t.id === view.tripId);
@@ -156,9 +179,9 @@ function App() {
           const stop = trip.stops.find((s) => s.id === view.stopId);
           if (!stop) return null;
           const nextStop = trip.stops.find((s) => s.id !== stop.id && !s.completed && !s.remark);
-          return <StopDetail key={stop.id} stop={stop} index={trip.stops.indexOf(stop) + 1} next={nextStop ? { index: trip.stops.indexOf(nextStop) + 1, name: nextStop.customer } : null} onNext={() => { setView(nextStop ? { name: "stop", tripId: trip.id, stopId: nextStop.id } : { name: "trip", tripId: trip.id }); window.scrollTo({ top: 0 }); }} onBack={() => setView({ name: "trip", tripId: trip.id })} onComplete={() => complete(trip.id, stop.id)} onReport={(remark) => reportStop(trip.id, stop.id, remark)} onClearRemark={() => clearStopRemark(trip.id, stop.id)} onUndo={() => uncomplete(trip.id, stop.id)} onUpdate={(patch) => updateStop(trip.id, stop.id, patch)} />;
+          return <StopDetail key={stop.id} stop={stop} dayId={trip.dayId} index={trip.stops.indexOf(stop) + 1} next={nextStop ? { index: trip.stops.indexOf(nextStop) + 1, name: nextStop.customer } : null} onNext={() => { setView(nextStop ? { name: "stop", tripId: trip.id, stopId: nextStop.id } : { name: "trip", tripId: trip.id }); window.scrollTo({ top: 0 }); }} onBack={() => setView({ name: "trip", tripId: trip.id })} onComplete={() => complete(trip.id, stop.id)} onReport={(remark) => reportStop(trip.id, stop.id, remark)} onClearRemark={() => clearStopRemark(trip.id, stop.id)} onUndo={() => uncomplete(trip.id, stop.id)} onUpdate={(patch) => updateStop(trip.id, stop.id, patch)} />;
         })()}
-        {celebrate && <Celebration onDismiss={() => setCelebrate(false)} />}
+        {celebrate && <Celebration summary={celebrate} onDismiss={() => setCelebrate(null)} />}
       </div>
     </div>
     </LanguageContext.Provider>
@@ -230,30 +253,33 @@ function Progress({ done, total }: { done: number; total: number }) {
 
 function TripList({ trips, allTrips, dayId, onDay, returned, driver, onOpen, onLogout, onReset }: { trips: Trip[]; allTrips: Trip[]; dayId: string; onDay: (d: string) => void; returned: Record<string, boolean>; driver: Driver | null; onOpen: (id: string) => void; onLogout: () => void; onReset: () => void }) {
   const { t: tr, localize, date } = useLanguage();
+  const recommendedId = nextTripId(trips, returned);
   return (
     <>
       <Header title={tr("Weekly schedule")} sub={driver ? `${driver.name} · 🚛 ${driver.truck ?? driver.id}` : undefined} right={<div className="flex items-center gap-3"><button onClick={onReset} className="text-sm opacity-90 underline">{tr("Reset progress")}</button><button onClick={onLogout} className="text-sm opacity-90">{tr('Sign out')}</button></div>} />
       <nav className="grid grid-cols-5 gap-1 p-3 border-b border-border bg-card">
         {days.map((d) => {
           const dt = allTrips.filter((t) => t.dayId === d.id);
-          const allDone = dt.every((t) => returned[t.id]);
+          const allDone = isDayComplete(dt, returned);
           return (
-            <button key={d.id} onClick={() => onDay(d.id)} className={`rounded-lg py-2 flex flex-col items-center ${d.id === dayId ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+            <Button variant="ghost" aria-pressed={d.id === dayId} key={d.id} onClick={() => onDay(d.id)} className={`h-auto rounded-lg py-2 flex flex-col items-center gap-0 ${allDone ? "bg-success text-success-foreground hover:bg-success hover:text-success-foreground" : d.id === dayId ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground" : "bg-muted"} ${d.id === dayId ? "ring-2 ring-ring ring-offset-2" : ""}`}>
               <span className="text-sm font-extrabold">{date(d.id, true)}</span>
               <span className="text-[11px] opacity-80">{date(d.id, false, true)}</span>
-              <span className="text-[10px] font-bold mt-0.5">{allDone ? tr("✓ Done") : `${dt.length} ${tr("trips")}`}</span>
-            </button>
+              <span className="text-[10px] font-bold mt-0.5 flex items-center gap-1">{allDone && <SquareCheck className="size-3" aria-hidden="true" />}{allDone ? tr("✓ Done") : `${dt.length} ${tr("trips")}`}</span>
+            </Button>
           );
         })}
       </nav>
       <main className="p-4 flex flex-col gap-3">
         <p className="text-sm font-bold">{date(dayId)}</p>
+        <DayAccessNotice dayId={dayId} />
         {trips.map((t) => {
           const done = t.stops.filter((s) => s.completed).length;
           const issues = t.stops.filter((s) => s.remark && !s.completed).length;
           const status = returned[t.id] ? "Complete" : done === t.stops.length ? "Return to branch" : done > 0 ? "In progress" : issues > 0 ? "Issues reported" : "Not started";
           return (
-            <button key={t.id} onClick={() => onOpen(t.id)} className="text-left rounded-xl border border-border bg-card p-4 shadow-sm active:scale-[0.99] transition">
+            <Button variant="outline" key={t.id} onClick={() => onOpen(t.id)} className={`block h-auto whitespace-normal text-left rounded-xl bg-card hover:bg-card hover:text-card-foreground p-4 shadow-sm active:scale-[0.99] transition ${t.id === recommendedId ? "border-2 border-primary" : "border border-border"}`}>
+              {t.id === recommendedId && <span className="mb-3 flex w-fit items-center gap-2 rounded-md bg-primary px-3 py-1 text-sm font-bold text-primary-foreground"><ArrowRight className="size-4" aria-hidden="true" />{tr("Next up")}</span>}
               <div className="flex justify-between items-start gap-3">
                 <div>
                   <h2 className="text-xl font-extrabold">{localize(t.name)}</h2>
@@ -264,7 +290,7 @@ function TripList({ trips, allTrips, dayId, onDay, returned, driver, onOpen, onL
               <p className="text-sm mt-3">{t.stops.length} {tr("stops")} · ~{t.miles} {tr("mi")} · {t.stops.filter((s) => s.type === "delivery").length} {tr("deliveries")} · {t.stops.filter((s) => s.type === "pickup").length} {tr("pickups")}</p>
               <div className="mt-3"><Progress done={done} total={t.stops.length} /></div>
               <p className="text-xs text-muted-foreground mt-1">{tr("{done} of {total} stops completed", { done, total: t.stops.length })}{issues > 0 ? ` · ⚠ ${tr("{count} reported", { count: issues })}` : ""}</p>
-            </button>
+            </Button>
           );
         })}
       </main>
@@ -279,6 +305,7 @@ function TypeBadge({ type }: { type: Stop["type"] }) {
 
 function TripDetail({ trip, returned, onBack, onStop, onReturn }: { trip: Trip; returned: boolean; onBack: () => void; onStop: (id: string) => void; onReturn: () => void }) {
   const { t: tr, localize, date } = useLanguage();
+  const editable = canEditDay(trip.dayId, useDriverClock());
   const pending = trip.stops.filter((s) => !s.completed);
   const completed = trip.stops.filter((s) => s.completed);
   const reported = pending.filter((s) => s.remark);
@@ -307,6 +334,7 @@ function TripDetail({ trip, returned, onBack, onStop, onReturn }: { trip: Trip; 
     <>
       <Header title={localize(trip.name)} sub={localize(trip.date)} onBack={onBack} />
       <main className="p-4 flex flex-col gap-5 pb-10">
+        <DayAccessNotice dayId={trip.dayId} />
         <div>
           <Progress done={completed.length} total={trip.stops.length} />
           <p className="text-sm mt-2 font-semibold">{tr("{done} of {total} stops completed", { done: completed.length, total: trip.stops.length })}{reported.length > 0 ? ` · ⚠ ${tr("{count} reported", { count: reported.length })}` : ""}</p>
@@ -322,7 +350,7 @@ function TripDetail({ trip, returned, onBack, onStop, onReturn }: { trip: Trip; 
           <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-2">{tr("Pending")} ({pending.length})</h3>
           {pending.length === 0 && <p className="text-sm text-muted-foreground">{tr('All stops completed.')}</p>}
           <div className="flex flex-col gap-2">
-            {pending.map((s) => <StopCard key={s.id} stop={s} n={trip.stops.indexOf(s) + 1} next={s.id === nextId} onClick={() => onStop(s.id)} />)}
+            {pending.map((s) => <StopCard key={s.id} stop={s} dayId={trip.dayId} n={trip.stops.indexOf(s) + 1} next={s.id === nextId} onClick={() => onStop(s.id)} />)}
           </div>
         </section>
 
@@ -330,7 +358,7 @@ function TripDetail({ trip, returned, onBack, onStop, onReturn }: { trip: Trip; 
           <section>
             <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-2">{tr("Completed")} ({completed.length})</h3>
             <div className="flex flex-col gap-2">
-              {completed.map((s) => <StopCard key={s.id} stop={s} n={trip.stops.indexOf(s) + 1} onClick={() => onStop(s.id)} />)}
+              {completed.map((s) => <StopCard key={s.id} stop={s} dayId={trip.dayId} n={trip.stops.indexOf(s) + 1} onClick={() => onStop(s.id)} />)}
             </div>
           </section>
         )}
@@ -348,7 +376,7 @@ function TripDetail({ trip, returned, onBack, onStop, onReturn }: { trip: Trip; 
           ) : allDone ? (
             <>
               <a href={mapsBranchUrl()} target="_blank" rel="noreferrer" className="mt-3 w-full min-h-12 px-3 py-2 rounded-lg bg-secondary text-secondary-foreground font-bold grid place-items-center text-center">{tr('🧭 Navigate to branch')}</a>
-              <button onClick={onReturn} className="mt-3 w-full h-12 rounded-lg bg-primary text-primary-foreground font-bold">{tr('Confirm arrival at branch')}</button>
+              <Button disabled={!editable} onClick={onReturn} className="mt-3 w-full h-12 rounded-lg font-bold">{tr('Confirm arrival at branch')}</Button>
             </>
           ) : (
             <p className="mt-2 text-sm">{tr('Unlocks after every stop is completed or reported with remarks.')}</p>
@@ -373,7 +401,7 @@ function Row({ icon, label, title, sub, done }: { icon: string; label: string; t
   );
 }
 
-function StopCard({ stop, n, next, onClick }: { stop: Stop; n: number; next?: boolean; onClick: () => void }) {
+function StopCard({ stop, dayId, n, next, onClick }: { stop: Stop; dayId: string; n: number; next?: boolean; onClick: () => void }) {
   const { t: tr, localize, date } = useLanguage();
   return (
     <button onClick={onClick} className={`text-left rounded-xl border bg-card p-4 flex gap-3 ${next ? "border-primary border-2 shadow-md" : "border-border"} ${stop.completed ? "opacity-70" : ""}`}>
@@ -389,6 +417,7 @@ function StopCard({ stop, n, next, onClick }: { stop: Stop; n: number; next?: bo
         <p className="text-sm text-muted-foreground truncate">{stop.address}</p>
         <p className="text-sm mt-1">{localize(stop.equipment)}{stop.qty > 1 ? ` ×${stop.qty}` : ""}</p>
         <p className="text-xs text-muted-foreground mt-1">🕒 {localize(stop.window)}</p>
+        <TimeWindowWarning stop={stop} dayId={dayId} />
         {stop.remark && <p className="text-xs mt-1 italic text-muted-foreground line-clamp-2">“{tr(stop.remark)}”</p>}
       </div>
     </button>
@@ -397,6 +426,8 @@ function StopCard({ stop, n, next, onClick }: { stop: Stop; n: number; next?: bo
 
 const QUICK_REASONS = ["Site closed — no access", "Customer not ready", "Equipment issue", "Traffic — ran out of time", "Contact unreachable"];
 const CONDITIONS = ["Good", "Needs attention", "Damaged"];
+
+const FUEL_LEVELS = ["Empty", "1/4", "1/2", "3/4", "Full"];
 
 function EquipmentPanel({ stop, onUpdate }: { stop: Stop; onUpdate: (patch: Partial<Stop>) => void }) {
   const { t: tr } = useLanguage();
@@ -468,7 +499,7 @@ function EquipmentPanel({ stop, onUpdate }: { stop: Stop; onUpdate: (patch: Part
         <a href={info.catalogUrl} target="_blank" rel="noreferrer" className="h-11 rounded-lg bg-secondary text-secondary-foreground font-bold text-sm grid place-items-center">{tr("📖 Specs & manuals on United Rentals")}</a>
 
         <div className="border-t border-border pt-3 flex flex-col gap-2">
-          <p className="text-xs uppercase font-bold tracking-wide">{tr("Verify equipment")}</p>
+          <p className="text-xs uppercase font-bold tracking-wide">{tr("Verify equipment (optional)")}</p>
           {stop.scannedTag ? (
             <div className="rounded-lg bg-success text-success-foreground p-3 font-bold text-sm flex items-center justify-between gap-2">
               <span>{tr("✓ Tag {code} verified", { code: stop.scannedTag })}</span>
@@ -494,7 +525,7 @@ function EquipmentPanel({ stop, onUpdate }: { stop: Stop; onUpdate: (patch: Part
         </div>
 
         <div className="border-t border-border pt-3 flex flex-col gap-2">
-          <p className="text-xs uppercase font-bold tracking-wide">{tr("Equipment photos ({count})", { count: photos.length })}</p>
+          <p className="text-xs uppercase font-bold tracking-wide">{tr("Equipment photos ({count}) (optional)", { count: photos.length })}</p>
           {photos.length > 0 && (
             <div className="grid grid-cols-3 gap-2">
               {photos.map((p, i) => (
@@ -510,6 +541,36 @@ function EquipmentPanel({ stop, onUpdate }: { stop: Stop; onUpdate: (patch: Part
             <input type="file" accept="image/*" capture="environment" multiple className="sr-only" onChange={(e) => { addPhotos(e.target.files); e.target.value = ""; }} />
           </label>
         </div>
+
+        {stop.type === "pickup" && (
+          <div className="border-t border-border pt-3 flex flex-col gap-2">
+            <p className="text-xs uppercase font-bold tracking-wide">{tr("Fuel & hour readings (optional)")}</p>
+            <p className="text-sm font-semibold">{tr("Fuel level")}</p>
+            <div className="flex flex-wrap gap-2">
+              {FUEL_LEVELS.map((f) => (
+                <button
+                  key={f}
+                  onClick={() => onUpdate({ fuelLevel: stop.fuelLevel === f ? undefined : f })}
+                  aria-pressed={stop.fuelLevel === f}
+                  className={`text-sm font-bold px-3 py-2 rounded-full border min-w-12 ${stop.fuelLevel === f ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border"}`}
+                >
+                  {tr(f)}
+                </button>
+              ))}
+            </div>
+            <label className="text-sm font-semibold flex flex-col gap-1">
+              {tr("Hour meter")}
+              <input
+                type="text"
+                inputMode="decimal"
+                value={stop.hourMeter ?? ""}
+                onChange={(e) => onUpdate({ hourMeter: e.target.value.replace(/[^0-9.]/g, "") || undefined })}
+                placeholder={tr("e.g. 1234.5")}
+                className="w-full rounded-lg border border-input bg-card p-3 text-base font-normal"
+              />
+            </label>
+          </div>
+        )}
 
         <div className="border-t border-border pt-3 flex flex-col gap-2">
           <p className="text-xs uppercase font-bold tracking-wide">{tr("Equipment condition (optional)")}</p>
@@ -546,8 +607,9 @@ function EquipmentPanel({ stop, onUpdate }: { stop: Stop; onUpdate: (patch: Part
   );
 }
 
-function StopDetail({ stop, index, next, onNext, onBack, onComplete, onReport, onClearRemark, onUndo, onUpdate }: { stop: Stop; index: number; next: { index: number; name: string } | null; onNext: () => void; onBack: () => void; onComplete: () => void; onReport: (remark: string) => void; onClearRemark: () => void; onUndo: () => void; onUpdate: (patch: Partial<Stop>) => void }) {
+function StopDetail({ stop, dayId, index, next, onNext, onBack, onComplete, onReport, onClearRemark, onUndo, onUpdate }: { stop: Stop; dayId: string; index: number; next: { index: number; name: string } | null; onNext: () => void; onBack: () => void; onComplete: () => void; onReport: (remark: string) => void; onClearRemark: () => void; onUndo: () => void; onUpdate: (patch: Partial<Stop>) => void }) {
   const { t: tr, localize, date } = useLanguage();
+  const editable = canEditDay(dayId, useDriverClock());
   const language = useContext(LanguageContext);
   const [checked, setChecked] = useState(false);
   const [editingRemark, setEditingRemark] = useState(false);
@@ -557,7 +619,9 @@ function StopDetail({ stop, index, next, onNext, onBack, onComplete, onReport, o
     <>
       <Header title={`${tr("Stop")} ${index}`} sub={localize(stop.window)} onBack={onBack} />
       <main className="p-4 flex flex-col gap-4 flex-1">
+        <DayAccessNotice dayId={dayId} />
         <TypeBadge type={stop.type} />
+        <TimeWindowWarning stop={stop} dayId={dayId} />
         <Field label={tr("Customer")} value={stop.customer} />
         <Field label={tr("Address")} value={stop.address} />
         <div className="grid grid-cols-2 gap-2">
@@ -570,9 +634,9 @@ function StopDetail({ stop, index, next, onNext, onBack, onComplete, onReport, o
           <p className="mt-2 text-sm">{tr("Site contact:")} <b>{stop.contactName}</b> · <a className="underline font-bold" href={`tel:${stop.contactPhone.replace(/[^0-9+]/g, "")}`}>{stop.contactPhone}</a></p>
         </div>
         <Field label={tr("Equipment")} value={`${localize(stop.equipment)}${stop.qty > 1 ? ` (${tr("qty")} ${stop.qty})` : ""}`} />
-        <EquipmentPanel stop={stop} onUpdate={onUpdate} />
+        <fieldset disabled={!editable} className="min-w-0 disabled:opacity-70"><EquipmentPanel stop={stop} onUpdate={onUpdate} /></fieldset>
         <Field label={tr("Time window")} value={localize(stop.window)} />
-        <div className="mt-auto pt-4 flex flex-col gap-3">
+        <fieldset disabled={!editable} className="min-w-0 mt-auto pt-4 flex flex-col gap-3 disabled:opacity-60">
           {stop.completed ? (
             <>
               <div className="rounded-xl bg-success text-success-foreground p-4 font-bold text-center">{tr(`✓ Equipment ${verb}`)}</div>
@@ -625,7 +689,7 @@ function StopDetail({ stop, index, next, onNext, onBack, onComplete, onReport, o
               </button>
             </>
           )}
-        </div>
+        </fieldset>
       </main>
     </>
   );
