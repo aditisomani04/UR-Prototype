@@ -9,6 +9,7 @@ import { LanguageContext, languages, isLanguage, useLanguage, translate, type La
 import { days, drivers, mapsRouteUrl, mapsStopUrl, mapsBranchUrl, type Trip, type Stop, type Driver } from "@/lib/trips";
 import { initialTrips } from "@/lib/schedule-data";
 import { Celebration } from "@/components/celebration";
+import { Onboarding, hasSeenOnboarding } from "@/components/onboarding";
 import { Button } from "@/components/ui/button";
 import { DriverClockProvider, TimeWindowWarning, useDriverClock } from "@/components/time-window-warning";
 import { nextTripId, canEditDay, isDayComplete } from "@/lib/trip-guidance";
@@ -63,6 +64,11 @@ function App() {
   const [returned, setReturned] = useState<Record<string, boolean>>({});
   const [dayId, setDayId] = useState("mon");
   const [celebrate, setCelebrate] = useState<CelebrationSummary | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const finishOnboarding = () => {
+    if (driver) { try { localStorage.setItem(`driver-onboarded-${driver.id}`, "1"); } catch { /* Storage can be unavailable. */ } }
+    setShowOnboarding(false);
+  };
   const baseRef = useRef(base);
   baseRef.current = base;
   const tripsRef = useRef(trips);
@@ -165,9 +171,10 @@ function App() {
               : translate(language, "Syncing {count} change(s)…", { count: pending })}
           </div>
         )}
-        {view.name === "login" && <Login onLogin={(d) => { setDriver(d); setView({ name: "trips" }); }} />}
+        {view.name === "login" && <Login onLogin={(d) => { setDriver(d); setShowOnboarding(!hasSeenOnboarding(d.id)); setView({ name: "trips" }); }} />}
+        {driver && showOnboarding && <Onboarding driverName={driver.name} onDone={finishOnboarding} />}
         {driver && view.name !== "login" && !trips.length && <p className="p-6 text-muted-foreground">{translate(language, "Loading your schedule…")}</p>}
-        {view.name === "trips" && <TripList trips={trips.filter((t) => t.dayId === dayId)} allTrips={trips} dayId={dayId} onDay={setDayId} returned={returned} driver={driver} onOpen={(id) => setView({ name: "trip", tripId: id })} onLogout={() => { setDriver(null); setView({ name: "login" }); }} onReset={resetProgress} />}
+        {view.name === "trips" && <TripList trips={trips.filter((t) => t.dayId === dayId)} allTrips={trips} dayId={dayId} onDay={setDayId} returned={returned} driver={driver} onOpen={(id) => setView({ name: "trip", tripId: id })} onLogout={() => { setDriver(null); setView({ name: "login" }); }} onReset={resetProgress} onHelp={() => setShowOnboarding(true)} />}
         {view.name === "trip" && (() => {
           const trip = trips.find((t) => t.id === view.tripId);
           if (!trip) return null;
@@ -251,12 +258,12 @@ function Progress({ done, total }: { done: number; total: number }) {
   );
 }
 
-function TripList({ trips, allTrips, dayId, onDay, returned, driver, onOpen, onLogout, onReset }: { trips: Trip[]; allTrips: Trip[]; dayId: string; onDay: (d: string) => void; returned: Record<string, boolean>; driver: Driver | null; onOpen: (id: string) => void; onLogout: () => void; onReset: () => void }) {
+function TripList({ trips, allTrips, dayId, onDay, returned, driver, onOpen, onLogout, onReset, onHelp }: { trips: Trip[]; allTrips: Trip[]; dayId: string; onDay: (d: string) => void; returned: Record<string, boolean>; driver: Driver | null; onOpen: (id: string) => void; onLogout: () => void; onReset: () => void; onHelp: () => void }) {
   const { t: tr, localize, date } = useLanguage();
   const recommendedId = nextTripId(trips, returned);
   return (
     <>
-      <Header title={tr("Weekly schedule")} sub={driver ? `${driver.name} · 🚛 ${driver.truck ?? driver.id}` : undefined} right={<div className="flex items-center gap-3"><button onClick={onReset} className="text-sm opacity-90 underline">{tr("Reset progress")}</button><button onClick={onLogout} className="text-sm opacity-90">{tr('Sign out')}</button></div>} />
+      <Header title={tr("Weekly schedule")} sub={driver ? `${driver.name} · 🚛 ${driver.truck ?? driver.id}` : undefined} right={<div className="flex items-center gap-3"><button onClick={onHelp} className="text-sm opacity-90 underline">{tr("Help")}</button><button onClick={onReset} className="text-sm opacity-90 underline">{tr("Reset progress")}</button><button onClick={onLogout} className="text-sm opacity-90">{tr('Sign out')}</button></div>} />
       <nav className="grid grid-cols-5 gap-1 p-3 border-b border-border bg-card">
         {days.map((d) => {
           const dt = allTrips.filter((t) => t.dayId === d.id);

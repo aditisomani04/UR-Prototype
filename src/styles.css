@@ -285,12 +285,46 @@
   animation: celebrate-pop 0.45s cubic-bezier(0.2, 1.2, 0.4, 1) both;
 }
 
+/* First-time walkthrough: gentle slide-in per screen and a pulsing icon. */
+@keyframes onboarding-slide {
+  from {
+    transform: translateY(18px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes onboarding-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+
+.onboarding-screen {
+  animation: onboarding-slide 0.35s ease-out both;
+}
+
+.onboarding-icon {
+  animation: onboarding-pulse 2.4s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .celebrate-balloon,
   .celebrate-piece {
     display: none;
   }
   .celebrate-card {
+    animation: none;
+  }
+  .onboarding-screen,
+  .onboarding-icon {
     animation: none;
   }
 }
