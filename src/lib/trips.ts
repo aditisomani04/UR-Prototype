@@ -29,6 +29,10 @@ export type Stop = {
   fuelLevel?: string | undefined;
   /** Pickup only: engine hour-meter reading, as typed. */
   hourMeter?: string | undefined;
+  /** Customer's on-screen signature (PNG data URL) confirming delivery/pickup. */
+  signature?: string | undefined;
+  /** Printed name of the person who signed. */
+  signerName?: string | undefined;
 };
 export type Trip = { id: string; dayId: string; name: string; branch: string; date: string; stops: Stop[]; miles: number };
 export type Day = { id: string; short: string; label: string; date: string };

@@ -15,6 +15,7 @@ import { DriverClockProvider, TimeWindowWarning, useDriverClock } from "@/compon
 import { nextTripId, canEditDay, isDayComplete } from "@/lib/trip-guidance";
 import { ArrowRight, SquareCheck, LockKeyhole } from "lucide-react";
 import { celebrationSummary, type CelebrationSummary } from "@/lib/celebration-summary";
+import { SignaturePad } from "@/components/signature-pad";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -124,7 +125,7 @@ function App() {
     const current = tripsRef.current.find((t) => t.id === tripId)?.stops.find((s) => s.id === stopId);
     if (current) {
       const next = { ...current, ...patch };
-      save(stopId, { completed: next.completed, remark: next.remark ?? null, scannedTag: next.scannedTag ?? null, photos: next.photos ?? [], condition: next.condition ?? null, conditionNote: next.conditionNote ?? null, fuelLevel: next.fuelLevel ?? null, hourMeter: next.hourMeter ?? null });
+      save(stopId, { completed: next.completed, remark: next.remark ?? null, scannedTag: next.scannedTag ?? null, photos: next.photos ?? [], condition: next.condition ?? null, conditionNote: next.conditionNote ?? null, fuelLevel: next.fuelLevel ?? null, hourMeter: next.hourMeter ?? null, signature: next.signature ?? null, signerName: next.signerName ?? null });
     }
     setTrips((ts) => ts.map((t) => (t.id !== tripId ? t : { ...t, stops: t.stops.map((s) => (s.id === stopId ? { ...s, ...patch } : s)) })));
   };
@@ -647,6 +648,12 @@ function StopDetail({ stop, dayId, index, next, onNext, onBack, onComplete, onRe
           {stop.completed ? (
             <>
               <div className="rounded-xl bg-success text-success-foreground p-4 font-bold text-center">{tr(`✓ Equipment ${verb}`)}</div>
+              {stop.signature && (
+                <div className="rounded-xl border border-border p-3">
+                  <p className="text-xs uppercase font-bold tracking-wide">{tr("✍ Customer signature")}{stop.signerName ? ` · ${stop.signerName}` : ""}</p>
+                  <img src={stop.signature} alt={tr("Customer signature")} className="mt-2 w-full h-24 object-contain bg-card rounded" />
+                </div>
+              )}
               <button onClick={onNext} className="min-h-16 px-4 py-3 rounded-xl bg-primary text-primary-foreground font-extrabold text-xl shadow-lg flex flex-col items-center">
                 <span>{next ? tr("Next stop →") : tr("All stops handled — back to trip →")}</span>
                 {next && <span className="text-sm font-semibold opacity-90">{tr("Up next: Stop {n} · {name}", { n: next.index, name: next.name })}</span>}
@@ -684,11 +691,13 @@ function StopDetail({ stop, dayId, index, next, onNext, onBack, onComplete, onRe
             </>
           ) : (
             <>
+              <SignaturePad signature={stop.signature} signerName={stop.signerName} onChange={onUpdate} />
               <label className="flex items-center gap-3 rounded-xl border border-border p-4">
                 <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} className="h-6 w-6 accent-primary" />
                 <span className="text-sm font-semibold">{tr(`I confirm the equipment was ${verb} and inspected.`)}</span>
               </label>
-              <button disabled={!checked} onClick={onComplete} className="min-h-14 px-3 py-2 rounded-lg bg-primary text-primary-foreground font-bold text-lg disabled:opacity-40">
+              {!stop.signature && <p className="text-xs font-semibold text-muted-foreground text-center">{tr("Customer signature needed to complete")}</p>}
+              <button disabled={!checked || !stop.signature} onClick={onComplete} className="min-h-14 px-3 py-2 rounded-lg bg-primary text-primary-foreground font-bold text-lg disabled:opacity-40">
                 {tr(`Mark ${stop.type} complete`)}
               </button>
               <button onClick={() => { setDraft(""); setEditingRemark(true); }} className="min-h-12 px-3 py-2 rounded-lg border-2 border-accent text-accent-foreground font-bold text-sm bg-accent/10">
