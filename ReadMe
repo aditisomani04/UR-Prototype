@@ -1,0 +1,139 @@
+# 🚚 Driver Route — Delivery & Pickup
+
+A mobile-friendly driver app prototype for managing equipment **delivery and pickup trips**. Drivers sign in with their ID, see their assigned truck, and view their upcoming deliveries and pickups.
+
+**Live demo:** https://urdriver.lovable.app/
+
+> ⚠️ This is a prototype. Authentication and data are mocked and should not be used in production as-is.
+
+---
+
+## ✨ Features
+
+- 🔐 **Driver sign-in** with Driver ID and password
+- 🚛 **Truck assignment** shown per driver
+- 📦 **Deliveries & pickups** view for the day's trips
+- 🌐 **Multilingual UI** — English, Español, हिन्दी
+- 📱 **Responsive design**, built mobile-first for use on the road
+
+---
+
+## 🧪 Demo Accounts
+
+Use any of the sample drivers below to try the app.
+
+| Driver         | Driver ID | Truck |
+| -------------- | --------- | ----- |
+| Marcus Reed    | D-1042    | T-108 |
+| Priya Nair     | D-1087    | T-112 |
+| Diego Alvarez  | D-1115    | T-121 |
+| Sarah Kim      | D-1163    | T-126 |
+| Jamal Carter   | D-1201    | T-133 |
+| Elena Petrova  | D-1248    | T-140 |
+
+**Password for all sample accounts:** `password`
+
+---
+
+## 🛠️ Tech Stack
+
+Built with [Lovable](https://lovable.dev). Typical Lovable projects use:
+
+- [React](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)
+- [Vite](https://vitejs.dev/)
+- [Tailwind CSS](https://tailwindcss.com/)
+- [shadcn/ui](https://ui.shadcn.com/)
+
+*(Update this list to match your actual `package.json`.)*
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- Node.js 18+ and npm (or pnpm / bun)
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/<your-username>/<your-repo>.git
+cd <your-repo>
+
+# Install dependencies
+npm install
+
+# Start the dev server
+npm run dev
+```
+
+The app will be available at `http://localhost:5173` (default Vite port).
+
+### Build for production
+
+```bash
+npm run build
+npm run preview
+```
+
+---
+
+## 📁 Project Structure
+
+```
+├── public/             # Static assets
+├── src/
+│   ├── components/     # Reusable UI components
+│   ├── pages/          # Sign-in and route/trip views
+│   ├── i18n/           # Translations (EN, ES, HI)
+│   ├── data/           # Mock drivers and trips
+│   └── main.tsx        # App entry point
+├── index.html
+└── package.json
+```
+
+*(Adjust folders to match your repo.)*
+
+---
+
+## 🌍 Localization
+
+The language selector on the sign-in screen supports:
+
+- 🇺🇸 English
+- 🇪🇸 Español
+- 🇮🇳 हिन्दी
+
+To add a language, create a new translation file and register it in the language selector.
+
+---
+
+## 🗺️ Roadmap
+
+- [ ] Real authentication (e.g., Supabase Auth)
+- [ ] Live database for drivers, trucks, and trips
+- [ ] Map view and route optimization
+- [ ] Proof of delivery (photo / signature)
+- [ ] Trip status updates (en route, completed, failed)
+- [ ] Dispatcher / admin dashboard
+
+---
+
+## 🤝 Contributing
+
+1. Fork the repo
+2. Create a feature branch: `git checkout -b feature/my-feature`
+3. Commit your changes: `git commit -m "Add my feature"`
+4. Push the branch: `git push origin feature/my-feature`
+5. Open a Pull Request
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).
+
+---
+
+Built with ❤️ using [Lovable](https://lovable.dev).
